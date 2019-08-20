@@ -3,6 +3,11 @@ import pyshark
 import logging
 import json
 
+from scapy.all import *
+from scapy.layers.inet import IP
+from scapy.layers.l2 import Ether
+from scapy.contrib.mqtt import *
+
 logging.basicConfig(level=logging.DEBUG)
 
 
@@ -99,7 +104,6 @@ def connect(packet, clients_dict, addr):
     client_id = ''
     ip, port = addr
     logging.debug('Connection From: ' + ip + ' ' + port)
-
     connect_flag = packet['mqtt'].get_field_by_showname('Connect Flags')
     flag_bits = parse_header(connect_flag)[::-1]
     if flag_bits[0]:
@@ -111,17 +115,34 @@ def connect(packet, clients_dict, addr):
     clients_dict[addr].set_username(username)
     clients_dict[addr].set_password(password)
 
+    # CONNACK
+    connack_pkt = Ether() / IP(dst=ip) / TCP(sport=1883, dport=int(port)) / MQTT() / MQTTConnack()
+    sendp(connack_pkt, iface='lo')
+
     logging.debug(username + ' ' + password + ' ' + client_id)
 
 
 def subscribe(packet, clients_dict, addr):
     topic = ''
+    ip, port = addr
     topic += packet['mqtt'].get_field_by_showname('Topic')
+    print(packet['mqtt'])
     clients_dict[addr].add_topic(topic)
+
+    # SUBACK
+
+    QoS = 0
+    if '1' in packet['mqtt'].get_field_by_showname('Requested QoS'):
+        QoS = 1
+        print("YEEEEEEY")
+    sub = MQTTSuback(msgid=int(packet['mqtt'].get_field_by_showname('Message Identifier')), retcode=QoS)
+    subscribe_ack = Ether() / IP(dst=ip) / TCP(sport=1883, dport=int(port), seq=86) / MQTT() / sub
+    print(subscribe_ack)
+    sendp(subscribe_ack, iface='lo')
     logging.debug(topic)
 
 
-def publish(packet, clients_dict, addr):
+def publish(packet, clients_dict, addr, header_bits_string):
     topic = ''
     message = ''
     topic += packet['mqtt'].get_field_by_showname('Topic')
@@ -129,17 +150,30 @@ def publish(packet, clients_dict, addr):
     clients_dict[addr].add_message_on_topic(topic, message)
     print(clients_dict[addr].message_on_topic)
     logging.debug(topic + '  ' + message)
+    print(packet['mqtt'])
+
+    # publish response depending on the QoS level
+    print(int(packet['mqtt'].get_field_by_showname('Message Identifier')))
+    ip, port = addr
+    if header_bits_string[1] == '1':
+        pbk = MQTTPuback(msgid=int(packet['mqtt'].get_field_by_showname('Message Identifier')))
+        puback_pkt = Ether() / IP(dst=ip) / TCP(sport=1883, dport=int(port)) / MQTT() / pbk
+        # print(puback_pkt)
+        sendp(puback_pkt, iface='lo')
+
+    elif header_bits_string[2] == '1':
+        print('asdads')
 
 
-def disconenct(packet, clients_dict, addr):
+def disconnect(packet, clients_dict, addr):
     clients_dict[addr].print_client()
     with open('data.txt', 'a') as fwrite:
         json.dump(clients_dict[addr].__dict__, fwrite, indent=4)
 
 
-def handle_commands(bit_string, command_type, packet, clients_dict):
+def handle_commands(header_bits_string, command_type, packet, clients_dict):
     default_msg = 'Don\'t have that one yet'
-    commd = command_type.get(bit_string[4:], default_msg)
+    commd = command_type.get(header_bits_string[4:], default_msg)
 
     addr = get_address(packet, clients_dict)
 
@@ -150,24 +184,25 @@ def handle_commands(bit_string, command_type, packet, clients_dict):
         subscribe(packet, clients_dict, addr)
 
     elif commd == 'PUBLISH':
-        publish(packet, clients_dict, addr)
+        publish(packet, clients_dict, addr, header_bits_string)
 
     elif commd == 'DISCONNECT':
-        disconenct(packet, clients_dict, addr)
+        disconnect(packet, clients_dict, addr)
 
 
 def clientThread(capture, command_type, clients_dict):
     for packet in capture:
         # get_address(packet, clients_dict)
         header = str(packet['mqtt'].get_field_by_showname('Header Flags'))
-        bit_string = parse_header(header)
+        header_bits_string = parse_header(header)
         # print(bit_string[4:])
-        handle_commands(bit_string, command_type, packet, clients_dict)
+        handle_commands(header_bits_string, command_type, packet, clients_dict)
 
 
 def main():
     clients_dict = {}
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server.bind(('', 1883))
         server.listen()
         field_list = ['Topic', 'User Name', 'Password', 'Message']
