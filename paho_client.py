@@ -30,7 +30,11 @@ client.loop_start()
 client.connect('127.0.0.1', 1883, 60)
 time.sleep(15)
 client.subscribe('Toopic', qos=1)
-client.publish('Toopic', 'Published')
+time.sleep(5)
+
+client.publish('Toopic', 'Published', qos=1)
+
+time.sleep(5)
 
 client.loop_stop()
 client.disconnect()
