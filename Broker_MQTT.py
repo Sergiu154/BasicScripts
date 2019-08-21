@@ -3,7 +3,7 @@ from threading import Thread
 from scapy.all import *
 from scapy.contrib.mqtt import *
 import logging
-import struct
+import json
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -17,12 +17,18 @@ def get_bits(header):
     return bits_string
 
 
+# skip the variable header, ignoring the variable message length
+
 def pass_message_len(command):
     i = 1
-    while command[i] == 128:
+
+    # while there still is a continuation bit present, skip the byte
+    while command[i] >= 128:
         i += 1
     return i
 
+
+# convert a pack of n bytes passed as a list with the LSB first and returns a decimal value
 
 def decimal_from_n_bytes(integers_list):
     bytes_list = []
@@ -40,21 +46,20 @@ def decimal_from_n_bytes(integers_list):
     return decimal
 
 
-# TO-DO - function to parse the packet for a len num of 2 bytes and an int or a string
-
 len_and_ints = 'LEN_AND_INT'
 len_and_string = 'LEN_AND_STRING'
 
+
+# interprets a (field_len,field_value) pattern present in a CONNECT packet
+# depending on the type of field_value
 
 def get_field_len_and_value(command, index, combo_type):
     length = decimal_from_n_bytes([command[index + 1], command[index]])
 
     index += 2
-    print(length)
     field_value = ''
     for i in range(0, length):
         field_value += chr(command[index + i])
-        # print(chr(command[index + i]))
 
     index += length
 
@@ -65,31 +70,53 @@ def get_field_len_and_value(command, index, combo_type):
 
 
 def connect_comm(command, client):
-    client.send(bytes(MQTT() / MQTTConnack()))
+    # send Connack packet
+
+    sess_present = 0
+
+    # TODO check it the client is in your database(maybe a list of clients)
+    #  if True: sessPresent =1
+
+    client.send(bytes(MQTT() / MQTTConnack(sessPresentFlag=sess_present, retcode=0)))
 
     # jump over msg len, protocol name and length
     index = pass_message_len(command) + 8
 
+    # init fields
+
     connect_flag = get_bits(command[index])
-    username_flag = connect_flag[0]
-    password_flag = connect_flag[1]
-    will_flag = connect_flag[6]
+    username_flag = int(connect_flag[6])
+    password_flag = int(connect_flag[7])
+    will_flag = int(connect_flag[2])
+    will_retain = 0
+    will_qos = 0
+    will_topic = ''
+    will_topic_len = 0
+    will_msg_len = 0
+    will_msg = ''
+    username_len = 0
+    password_len = 0
+    username = ''
+    password = ''
 
     # get to keep_alive 2 byte field
     index += 1
 
     keep_alive = decimal_from_n_bytes([command[index + 1], command[index]])
 
+    # pass keep alive packet
     index += 2
 
     index, client_id_length, client_id = get_field_len_and_value(command, index, len_and_ints)
 
-    print('Client id is :', int(client_id))
+    logging.debug('Client id is : ' + str(client_id))
 
     # go to the payload whose structure depends on the will_flag
 
     if will_flag == 1:
-        will_retain = connect_flag[3]
+
+        will_retain = int(connect_flag[5])
+        will_qos = decimal_from_n_bytes([connect_flag[4], connect_flag[3]])
 
         if username_flag and password_flag:
             index, will_topic_len, will_topic = get_field_len_and_value(command, index, len_and_string)
@@ -102,13 +129,26 @@ def connect_comm(command, client):
         if username_flag and password_flag:
             index, username_len, username = get_field_len_and_value(command, index, len_and_string)
             index, password_len, password = get_field_len_and_value(command, index, len_and_string)
-            print('Username len and user:', str(username_len) + ' ' + username)
-            print('Password len and password:', str(password_len) + ' ' + password)
+            logging.debug('Username len and user: ' + str(username_len) + ' ' + username)
+            logging.debug('Password len and password: ' + str(password_len) + ' ' + password)
+
+    # TODO use a data structure to store a new incoming client
+    #  and handle the CleanSession scenario
+
+    # return a Connect packet as a string
+    pkt = MQTTConnect(usernameflag=username_flag, passwordflag=password_flag, willretainflag=will_retain,
+                      willQOSflag=will_qos, willflag=will_flag, cleansess=int(connect_flag[6]),
+                      reserved=int(connect_flag[7]),
+                      klive=keep_alive, clientIdlen=client_id_length, clientId=client_id,
+                      wtoplen=will_topic_len,
+                      willtopic=will_topic, wmsglen=will_msg_len, willmsg=will_msg, userlen=username_len,
+                      username=username, passlen=password_len, password=password)
+    return pkt.show(dump=True)
 
 
 def publish_comm(command, client, header_as_bits):
     qos = int(header_as_bits[1]) + 2 * int(header_as_bits[2])
-    print('QOS', qos)
+    logging.debug('QOS ' + str(qos))
 
     index = pass_message_len(command) + 1
 
@@ -117,27 +157,43 @@ def publish_comm(command, client, header_as_bits):
 
     if qos == 1:
         client.send(bytes(MQTT() / MQTTPuback(msgid=msg_id)))
+    elif qos == 2:
+        client.send(bytes(MQTT() / MQTTPubrec(msgid=msg_id)))
+        client.send(bytes(MQTT() / MQTTPubcomp(msgid=msg_id)))
+    pkt = MQTTPublish(length=int(topic_len), topic=topic, msgid=msg_id, value=message)
+    # return pkt.show(dump=True)
 
 
 def subscribe_comm(command, client, header):
-    client.send(bytes(MQTT() / MQTTSuback()))
+    granted_qos = decimal_from_n_bytes([command[len(command) - 1]])
+    logging.debug('Granted QoS: ' + str(granted_qos))
+
+    index = pass_message_len(command) + 1
+
+    msg_id = decimal_from_n_bytes([command[index + 1], command[index]])
+
+    client.send(bytes(MQTT() / MQTTSuback(msgid=msg_id, retcode=granted_qos)))
 
 
-def disconnect_command(command, client, header):
-    pass
+def disconnect_command(command, client, header, client_packet):
+    with open('data.txt', 'w') as fwrite:
+        json.dump(client_packet, fwrite, indent=4)
 
 
 def client_thread(client, command_type):
     while True:
         command = client.recv(1024)
         if len(command) > 1:
-            print(command[0])
 
             header_as_bits = get_bits(command[0])
             type_of_command = command_type.get(header_as_bits[4:])
 
             if type_of_command == 'CONNECT':
-                connect_comm(command, client)
+                # check if reserved field is 0, otherwise close the connection
+                if header_as_bits[:4] != '0000':
+                    client.close()
+                connect_packet = connect_comm(command, client)
+                logging.debug(connect_packet)
 
             elif type_of_command == 'PUBLISH':
                 publish_comm(command, client, header_as_bits)
@@ -148,7 +204,7 @@ def client_thread(client, command_type):
 
             elif type_of_command == 'DISCONNECT':
 
-                disconnect_command(command, client, header_as_bits)
+                disconnect_command(command, client, header_as_bits, connect_packet)
 
                 break
     client.close()
