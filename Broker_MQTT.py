@@ -7,6 +7,50 @@ import json
 
 logging.basicConfig(level=logging.DEBUG)
 
+list_of_clients = []
+
+
+# store client's data in a ClientData object
+
+class ClientData:
+    def __init__(self, ip=' ', prt='', user='', pswd=''):
+        self.password = pswd
+        self.username = user
+        self.ip = ip
+        self.port = prt
+        self.subscribed_topics = []
+        self.message_on_topic = {}
+
+    def set_password(self, passwd):
+        self.password = passwd
+
+    def set_ip(self, IP):
+        self.ip = IP
+
+    def set_username(self, user):
+        self.username = user
+
+    def set_port(self, prt):
+        self.port = prt
+
+    def add_topic(self, tpc):
+        if tpc not in self.subscribed_topics:
+            self.subscribed_topics = []
+        self.subscribed_topics.append(tpc)
+
+    # TO-DO: edge case: client publishes on a topic on which he is not subscribed
+    def add_message_on_topic(self, tpc, msg):
+        if not self.message_on_topic.get(tpc):
+            self.message_on_topic[tpc] = []
+        self.message_on_topic[tpc].append(msg)
+
+    def print_client(self):
+        print(self.username, self.password, self.ip, self.port)
+        for topic in self.subscribed_topics:
+            print(topic)
+        for key in self.message_on_topic.keys():
+            print(self.message_on_topic.get(key))
+
 
 # get a string o bits from an integer (little-endian)
 
@@ -72,6 +116,9 @@ def get_field_len_and_value(command, index, combo_type):
 def connect_comm(command, client):
     # send Connack packet
 
+    ip, port = client.getpeername()
+    logging.debug('CONNECT address' + ip + ' ' + str(port))
+
     sess_present = 0
 
     # TODO check it the client is in your database(maybe a list of clients)
@@ -134,16 +181,7 @@ def connect_comm(command, client):
 
     # TODO use a data structure to store a new incoming client
     #  and handle the CleanSession scenario
-
-    # return a Connect packet as a string
-    pkt = MQTTConnect(usernameflag=username_flag, passwordflag=password_flag, willretainflag=will_retain,
-                      willQOSflag=will_qos, willflag=will_flag, cleansess=int(connect_flag[6]),
-                      reserved=int(connect_flag[7]),
-                      klive=keep_alive, clientIdlen=client_id_length, clientId=client_id,
-                      wtoplen=will_topic_len,
-                      willtopic=will_topic, wmsglen=will_msg_len, willmsg=will_msg, userlen=username_len,
-                      username=username, passlen=password_len, password=password)
-    return pkt.show(dump=True)
+    list_of_clients.append(ClientData(ip, port, username, password))
 
 
 def publish_comm(command, client, header_as_bits):
@@ -160,8 +198,6 @@ def publish_comm(command, client, header_as_bits):
     elif qos == 2:
         client.send(bytes(MQTT() / MQTTPubrec(msgid=msg_id)))
         client.send(bytes(MQTT() / MQTTPubcomp(msgid=msg_id)))
-    pkt = MQTTPublish(length=int(topic_len), topic=topic, msgid=msg_id, value=message)
-    # return pkt.show(dump=True)
 
 
 def subscribe_comm(command, client, header):
@@ -176,8 +212,12 @@ def subscribe_comm(command, client, header):
 
 
 def disconnect_command(command, client, header, client_packet):
-    with open('data.txt', 'w') as fwrite:
-        json.dump(client_packet, fwrite, indent=4)
+    with open('data.txt', 'a') as fwrite:
+        json.dump(client_packet.__dict__, fwrite, indent=4)
+
+
+def unsubscribe_command(command, client, header_as_bits):
+    pass
 
 
 def client_thread(client, command_type):
@@ -202,10 +242,12 @@ def client_thread(client, command_type):
 
                 subscribe_comm(command, client, header_as_bits)
 
+            elif type_of_command == 'UNSUBSCRIBE':
+                unsubscribe_command(command, client, header_as_bits)
+
             elif type_of_command == 'DISCONNECT':
 
-                disconnect_command(command, client, header_as_bits, connect_packet)
-
+                disconnect_command(command, client, header_as_bits, list_of_clients[0])
                 break
     client.close()
 
@@ -214,7 +256,8 @@ def main():
     command_type = {'1000': 'CONNECT',
                     '0001': 'SUBSCRIBE',
                     '1100': 'PUBLISH',
-                    '0111': 'DISCONNECT'}
+                    '0111': 'DISCONNECT',
+                    '1010': 'UNSUBSCRIBE'}
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
