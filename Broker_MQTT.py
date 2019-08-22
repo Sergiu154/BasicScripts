@@ -3,15 +3,16 @@ from threading import Thread
 from scapy.all import *
 from scapy.contrib.mqtt import *
 import logging
+from time import strftime, localtime
 import json
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.DEBUG)
 
 clients_dict = {}
 
 
 class ClientData:
-    def __init__(self, ip=' ', prt='', user='', pswd='', client_id=''):
+    def __init__(self, ip=' ', prt='', user='', pswd='', client_id='', is_connected=False):
         self.ip = ip
         self.port = prt
         self.password = pswd
@@ -19,6 +20,9 @@ class ClientData:
         self.client_id = client_id
         self.subscribed_topics = []
         self.message_on_topic = {}
+        self.has_connected = is_connected
+        # tuple (timestamp,binary_file)
+        self.event_log = []
 
     def set_password(self, passwd):
         self.password = passwd
@@ -35,6 +39,9 @@ class ClientData:
     def add_topic(self, tpc, qos):
         if (tpc, qos) not in self.subscribed_topics:
             self.subscribed_topics.append((tpc, qos))
+
+    def add_event(self, curr_time, cmm):
+        self.event_log.append((curr_time, cmm))
 
     # TO-DO: edge case: client publishes on a topic on which he is not subscribed
     def add_message_on_topic(self, tpc, msg):
@@ -120,9 +127,17 @@ def get_field_len_and_value(command, index, combo_type):
             return index, length, field_value
 
 
-def connect_comm(command, client):
-    # send Connack packet
+# check if the fields are valid, otherwise consider those a probable malicious stream of bytes
 
+def inspect_connect_packet(check):
+    return check['proto_len'] != 4 or check['proto_name'] != 'MQTT' \
+           or check['keep_alive'].isdigit() == False or check['client_id_length'].isdigit() == False \
+           or check['client_id'].isdigit() == False
+
+
+def connect_comm(command, header_as_bits, client):
+    # send Connack packet
+    # logging.debug('Hello ' + command.decode())
     # TODO check if the client is in your database(maybe a list of clients)
     #  if True: sessPresent =1
 
@@ -135,7 +150,16 @@ def connect_comm(command, client):
     logging.debug('Client connected: ' + ip + ' ' + str(port))
 
     # jump over msg len, protocol name and length
-    index = pass_message_len(command) + 8
+    # index = pass_message_len(command) + 8
+
+    index = pass_message_len(command) + 1
+
+    index, proto_len, proto_name = get_field_len_and_value(command, index, len_and_string)
+
+    # pass protocol version
+    index += 1
+
+    logging.debug('Protocol: ' + proto_name + ' ' + str(proto_len))
 
     # init fields
 
@@ -143,14 +167,14 @@ def connect_comm(command, client):
     username_flag = int(connect_flag[6])
     password_flag = int(connect_flag[7])
     will_flag = int(connect_flag[2])
-    will_retain = 0
-    will_qos = 0
-    will_topic = ''
-    will_topic_len = 0
-    will_msg_len = 0
-    will_msg = ''
-    username_len = 0
-    password_len = 0
+    # will_retain = 0
+    # will_qos = 0
+    # will_topic = ''
+    # will_topic_len = 0
+    # will_msg_len = 0
+    # will_msg = ''
+    # username_len = 0
+    # password_len = 0
     username = ''
     password = ''
 
@@ -190,7 +214,19 @@ def connect_comm(command, client):
     # TODO use a data structure to store a new incoming client
     #  and handle the CleanSession scenario
 
-    return ClientData(ip=ip, prt=port, user=username, pswd=password, client_id=str(client_id))
+    check_dict = {
+        'proto_len': proto_len,
+        'proto_name': proto_name,
+        'keep_alive': str(keep_alive),
+        'client_id_length': str(client_id_length),
+        'client_id': str(client_id)}
+
+    client_data = ClientData(ip=ip, prt=port, user=username, pswd=password, client_id=str(client_id), is_connected=True)
+
+    if inspect_connect_packet(check_dict) or header_as_bits[:4] != '0000':
+        client_data.add_event(strftime("%Y-%m-%d %H:%M:%S", localtime()), str(command))
+
+    return client_data
 
 
 def publish_comm(command, client, header_as_bits, client_data):
@@ -207,19 +243,24 @@ def publish_comm(command, client, header_as_bits, client_data):
     client_data.add_topic(topic, qos)
     client_data.add_message_on_topic(topic, message)
 
-    # send the right response packet depending on the QoS level
+    if not str(topic_len).isdigit() or not str(msg_id).isdigit():
+        client_data.add_event(strftime("%Y-%m-%d %H:%M:%S", localtime()), str(command))
+
+        # send the right response packet depending on the QoS level
     if qos == 1:
         client.send(bytes(MQTT() / MQTTPuback(msgid=msg_id)))
     elif qos == 2:
         client.send(bytes(MQTT() / MQTTPubrec(msgid=msg_id)))
         client.send(bytes(MQTT() / MQTTPubcomp(msgid=msg_id)))
-    # client.send(message.encode('utf-8'))
 
 
-def subscribe_comm(command, client, client_data):
+def subscribe_comm(command, client, header_as_bits, client_data):
     index = pass_message_len(command) + 1
 
     msg_id = decimal_from_n_bytes([command[index + 1], command[index]])
+
+    if not str(msg_id).isdigit() or header_as_bits[:4] != '0100':
+        client_data.add_event(strftime("%Y-%m-%d %H:%M:%S", localtime()), str(command))
 
     index += 2
     while True:
@@ -227,6 +268,10 @@ def subscribe_comm(command, client, client_data):
             index, topic_len, topic = get_field_len_and_value(command, index, len_and_string)
             granted_qos = decimal_from_n_bytes([command[index]])
             client_data.add_topic(topic, granted_qos)
+
+            if granted_qos > 2 or (not str(topic_len).isdigit()):
+                client_data.add_event(strftime("%Y-%m-%d %H:%M:%S", localtime()), str(command))
+
             logging.debug('Granted QoS: ' + str(granted_qos))
             index += 1
         except IndexError:
@@ -240,7 +285,16 @@ def disconnect_command(command, client, header, client_packet):
         json.dump(client_packet.__dict__, fwrite, indent=4)
 
 
-def client_thread(client, command_type):
+def handle_unexpected_packet(command, client, client_data):
+    logging.debug(command.decode('utf-8'))
+    client_data.add_event(strftime("%Y-%m-%d %H:%M:%S", localtime()), str(command))
+
+
+def handle_unexpected_order(command, client, client_data):
+    pass
+
+
+def client_thread(client, command_type, client_data):
     while True:
         command = client.recv(1024)
         if len(command) > 1:
@@ -252,20 +306,27 @@ def client_thread(client, command_type):
                 # check if reserved field is 0, otherwise close the connection
                 if header_as_bits[:4] != '0000':
                     client.close()
-                client_data = connect_comm(command, client)
+                client_data = connect_comm(command, header_as_bits, client)
 
-            elif type_of_command == 'PUBLISH':
-                publish_comm(command, client, header_as_bits, client_data)
+            elif client_data.has_connected:
+                if type_of_command == 'PUBLISH':
+                    publish_comm(command, client, header_as_bits, client_data)
 
-            elif type_of_command == 'SUBSCRIBE':
+                elif type_of_command == 'SUBSCRIBE':
+                    subscribe_comm(command, client, header_as_bits, client_data)
 
-                subscribe_comm(command, client, client_data)
+                elif type_of_command == 'DISCONNECT':
+                    disconnect_command(command, client, header_as_bits, client_data)
+                    break
+                elif type_of_command == 'PUBREL':
+                    pass
+                else:
+                    handle_unexpected_packet(command, client, client_data)
+                    break
 
-            elif type_of_command == 'DISCONNECT':
+            else:
+                handle_unexpected_order(command, client, client_data)
 
-                disconnect_command(command, client, header_as_bits, client_data)
-
-                break
     client.close()
 
 
@@ -273,7 +334,8 @@ def main():
     command_type = {'1000': 'CONNECT',
                     '0001': 'SUBSCRIBE',
                     '1100': 'PUBLISH',
-                    '0111': 'DISCONNECT'}
+                    '0111': 'DISCONNECT',
+                    '0110': 'PUBREL'}
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -281,7 +343,8 @@ def main():
         server.listen()
         while True:
             client, addr = server.accept()
-            Thread(target=client_thread, args=(client, command_type)).start()
+            client_data = ClientData()
+            Thread(target=client_thread, args=(client, command_type, client_data)).start()
 
 
 if __name__ == '__main__':
