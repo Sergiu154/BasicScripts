@@ -223,9 +223,19 @@ def connect_comm(command, header_as_bits, client):
 
     client_data = ClientData(ip=ip, prt=port, user=username, pswd=password, client_id=str(client_id), is_connected=True)
 
-    if inspect_connect_packet(check_dict) or header_as_bits[:4] != '0000' or connect_flag[0] != '0 ':
-        client_data.add_event(strftime("%Y-%m-%d %H:%M:%S", localtime()), str(command))
+    param_dict = {'ip': ip,
+                  'port': port,
+                  'command_name': 'Connect',
+                  'username': username,
+                  'password': password,
+                  'client_id': client_id,
+                  'has_connected': True
+                  }
 
+    if inspect_connect_packet(check_dict) or header_as_bits[:4] != '0000' or connect_flag[0] != '0':
+        client_data.add_event(strftime("%Y-%m-%d %H:%M:%S", localtime()), str(command))
+    else:
+        server_event_known_command(param_dict)
     return client_data
 
 
@@ -243,8 +253,19 @@ def publish_comm(command, client, header_as_bits, client_data):
     client_data.add_topic(topic, qos)
     client_data.add_message_on_topic(topic, message)
 
+    ip, port = client.getpeername()
+    param_dict = {
+        'ip': ip,
+        'port': port,
+        'command_name': 'Publish',
+        'topic': topic,
+        'message': message,
+        'qos': qos
+    }
     if not str(topic_len).isdigit() or not str(msg_id).isdigit():
         client_data.add_event(strftime("%Y-%m-%d %H:%M:%S", localtime()), str(command))
+    else:
+        server_event_known_command(param_dict)
 
         # send the right response packet depending on the QoS level
     if qos == 1:
@@ -260,9 +281,10 @@ def subscribe_comm(command, client, header_as_bits, client_data):
     msg_id = decimal_from_n_bytes([command[index + 1], command[index]])
 
     # inspect the packet
-
+    ok = True
     if not str(msg_id).isdigit() or header_as_bits[:4] != '0100':
         client_data.add_event(strftime("%Y-%m-%d %H:%M:%S", localtime()), str(command))
+        ok = False
 
     index += 2
     while True:
@@ -273,11 +295,23 @@ def subscribe_comm(command, client, header_as_bits, client_data):
             # inspect the packet qos and topic_len
             if granted_qos > 2 or (not str(topic_len).isdigit()):
                 client_data.add_event(strftime("%Y-%m-%d %H:%M:%S", localtime()), str(command))
-
+                ok = False
             logging.debug('Granted QoS: ' + str(granted_qos))
             index += 1
         except IndexError:
             break
+
+    ip, port = client.getpeername()
+    if ok:
+        param_dict = {
+            'ip': ip,
+            'port': port,
+            'command_name': 'Subscribe',
+            'topic': topic,
+            'qos': granted_qos
+
+        }
+        server_event_known_command(param_dict)
 
     client.send(bytes(MQTT() / MQTTSuback(msgid=msg_id, retcode=granted_qos)))
 
@@ -287,13 +321,18 @@ def disconnect_command(command, client, header, client_packet):
         json.dump(client_packet.__dict__, fwrite, indent=4)
 
 
-def handle_unexpected_packet(command, client, client_data):
+def server_event_unexpected_packet(command, client, client_data):
     logging.debug(command.decode('utf-8'))
-    client_data.add_event(strftime("%Y-%m-%d %H:%M:%S", localtime()), str(command))
+    state = 'Before Connect'
+    if client_data.has_connected:
+        state = 'After Connect'
+
+    print(strftime("%Y-%m-%d %H:%M:%S", localtime()), str(command), state)
 
 
-def handle_unexpected_order(command, client, client_data):
-    client_data.add_event(strftime("%Y-%m-%d %H:%M:%S", localtime()), str(command))
+def server_event_known_command(param_dict):
+    for key in param_dict.keys():
+        print(key, param_dict.get(key))
 
 
 def client_thread(client, command_type, client_data):
@@ -323,11 +362,10 @@ def client_thread(client, command_type, client_data):
                 elif type_of_command == 'PUBREL':
                     pass
                 else:
-                    handle_unexpected_packet(command, client, client_data)
-                    break
+                    server_event_unexpected_packet(command, client, client_data)
 
             else:
-                handle_unexpected_order(command, client, client_data)
+                server_event_unexpected_packet(command, client, client_data)
 
     client.close()
 
