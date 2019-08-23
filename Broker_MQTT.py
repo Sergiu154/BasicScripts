@@ -223,7 +223,7 @@ def connect_comm(command, header_as_bits, client):
 
     client_data = ClientData(ip=ip, prt=port, user=username, pswd=password, client_id=str(client_id), is_connected=True)
 
-    if inspect_connect_packet(check_dict) or header_as_bits[:4] != '0000':
+    if inspect_connect_packet(check_dict) or header_as_bits[:4] != '0000' or connect_flag[0] != '0 ':
         client_data.add_event(strftime("%Y-%m-%d %H:%M:%S", localtime()), str(command))
 
     return client_data
@@ -259,6 +259,8 @@ def subscribe_comm(command, client, header_as_bits, client_data):
 
     msg_id = decimal_from_n_bytes([command[index + 1], command[index]])
 
+    # inspect the packet
+
     if not str(msg_id).isdigit() or header_as_bits[:4] != '0100':
         client_data.add_event(strftime("%Y-%m-%d %H:%M:%S", localtime()), str(command))
 
@@ -268,7 +270,7 @@ def subscribe_comm(command, client, header_as_bits, client_data):
             index, topic_len, topic = get_field_len_and_value(command, index, len_and_string)
             granted_qos = decimal_from_n_bytes([command[index]])
             client_data.add_topic(topic, granted_qos)
-
+            # inspect the packet qos and topic_len
             if granted_qos > 2 or (not str(topic_len).isdigit()):
                 client_data.add_event(strftime("%Y-%m-%d %H:%M:%S", localtime()), str(command))
 
@@ -281,7 +283,7 @@ def subscribe_comm(command, client, header_as_bits, client_data):
 
 
 def disconnect_command(command, client, header, client_packet):
-    with open('data.txt', 'w') as fwrite:
+    with open('data.txt', 'a') as fwrite:
         json.dump(client_packet.__dict__, fwrite, indent=4)
 
 
@@ -291,7 +293,7 @@ def handle_unexpected_packet(command, client, client_data):
 
 
 def handle_unexpected_order(command, client, client_data):
-    pass
+    client_data.add_event(strftime("%Y-%m-%d %H:%M:%S", localtime()), str(command))
 
 
 def client_thread(client, command_type, client_data):
