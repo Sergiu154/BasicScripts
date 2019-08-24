@@ -186,7 +186,7 @@ def connect_comm(command, header_as_bits, client):
     # pass keep alive packet
     index += 2
 
-    index, client_id_length, client_id = get_field_len_and_value(command, index, len_and_ints)
+    index, client_id_length, client_id = get_field_len_and_value(command, index, len_and_string)
 
     logging.debug('Client ID: ' + str(client_id))
 
@@ -245,9 +245,20 @@ def publish_comm(command, client, header_as_bits, client_data):
 
     index = pass_message_len(command) + 1
 
-    # get topic and message
+    # get topic and messages
     index, topic_len, topic = get_field_len_and_value(command, index, len_and_string)
-    index, msg_id, message = get_field_len_and_value(command, index, msgID_and_msg)
+
+    if qos > 0:
+        index, msg_id, message = get_field_len_and_value(command, index, msgID_and_msg)
+    else:
+        msg = ''
+        while True:
+            try:
+                msg += chr(command[index])
+                index += 1
+            except IndexError as e:
+                break
+        message = msg[:len(msg) - 2]
 
     # store the data that has been received
     client_data.add_topic(topic, qos)
@@ -262,7 +273,7 @@ def publish_comm(command, client, header_as_bits, client_data):
         'message': message,
         'qos': qos
     }
-    if not str(topic_len).isdigit() or not str(msg_id).isdigit():
+    if not str(topic_len).isdigit() or (qos > 0 and not str(msg_id).isdigit()):
         client_data.add_event(strftime("%Y-%m-%d %H:%M:%S", localtime()), str(command))
     else:
         server_event_known_command(param_dict)
@@ -359,7 +370,7 @@ def client_thread(client, command_type, client_data):
                 elif type_of_command == 'DISCONNECT':
                     disconnect_command(command, client, header_as_bits, client_data)
                     break
-                elif type_of_command == 'PUBREL':
+                elif type_of_command == 'PUBREL' or type_of_command == 'PINGREQ':
                     pass
                 else:
                     server_event_unexpected_packet(command, client, client_data)
@@ -375,7 +386,8 @@ def main():
                     '0001': 'SUBSCRIBE',
                     '1100': 'PUBLISH',
                     '0111': 'DISCONNECT',
-                    '0110': 'PUBREL'}
+                    '0110': 'PUBREL',
+                    '0011': 'PINGREQ'}
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
