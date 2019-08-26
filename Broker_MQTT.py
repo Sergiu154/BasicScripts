@@ -132,7 +132,8 @@ def get_field_len_and_value(command, index, combo_type):
 def inspect_connect_packet(check):
     return check['proto_len'] != 4 or check['proto_name'] != 'MQTT' \
            or check['keep_alive'].isdigit() == False or check['client_id_length'].isdigit() == False \
-           or check['client_id'].isdigit() == False
+           or check['client_id'].isdigit() == False or check['will_topic_len'].isdigit() == False \
+           or check['will_msg_len'].isdigit() == False or check['will_qos'] > 2
 
 
 def connect_comm(command, header_as_bits, client):
@@ -191,11 +192,15 @@ def connect_comm(command, header_as_bits, client):
     logging.debug('Client ID: ' + str(client_id))
 
     # go to the payload whose structure depends on the will_flag
-
+    will_msg = ''
+    will_topic = ''
+    will_topic_len = 0
+    will_msg_len = 0
+    will_qos = 0
     if will_flag == 1:
 
         will_retain = int(connect_flag[5])
-        will_qos = decimal_from_n_bytes([connect_flag[4], connect_flag[3]])
+        will_qos = decimal_from_n_bytes([int(connect_flag[4]), int(connect_flag[3])])
 
         if username_flag and password_flag:
             index, will_topic_len, will_topic = get_field_len_and_value(command, index, len_and_string)
@@ -219,7 +224,11 @@ def connect_comm(command, header_as_bits, client):
         'proto_name': proto_name,
         'keep_alive': str(keep_alive),
         'client_id_length': str(client_id_length),
-        'client_id': str(client_id)}
+        'client_id': str(client_id),
+        'will_topic_len': str(will_topic_len),
+        'will_msg_len': str(will_msg_len),
+        'will_qos': will_qos
+    }
 
     client_data = ClientData(ip=ip, prt=port, user=username, pswd=password, client_id=str(client_id), is_connected=True)
 
@@ -229,7 +238,10 @@ def connect_comm(command, header_as_bits, client):
                   'username': username,
                   'password': password,
                   'client_id': client_id,
-                  'has_connected': True
+                  'has_connected': True,
+                  'will_message': will_msg,
+                  'will_topic': will_topic
+
                   }
 
     if inspect_connect_packet(check_dict) or header_as_bits[:4] != '0000' or connect_flag[0] != '0':
