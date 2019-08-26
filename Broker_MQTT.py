@@ -131,14 +131,13 @@ def get_field_len_and_value(command, index, combo_type):
 
 def inspect_connect_packet(check):
     return check['proto_len'] != 4 or check['proto_name'] != 'MQTT' \
-           or check['keep_alive'].isdigit() == False or check['client_id_length'].isdigit() == False \
+           or check['keep_alive'].isdigit() == False \
            or check['client_id'].isdigit() == False or check['will_topic_len'].isdigit() == False \
            or check['will_msg_len'].isdigit() == False or check['will_qos'] > 2
 
 
 def connect_comm(command, header_as_bits, client):
     # send Connack packet
-    # logging.debug('Hello ' + command.decode())
     # TODO check if the client is in your database(maybe a list of clients)
     #  if True: sessPresent =1
 
@@ -259,7 +258,7 @@ def publish_comm(command, client, header_as_bits, client_data):
 
     # get topic and messages
     index, topic_len, topic = get_field_len_and_value(command, index, len_and_string)
-
+    msg_id = 0
     if qos > 0:
         index, msg_id, message = get_field_len_and_value(command, index, msgID_and_msg)
     else:
