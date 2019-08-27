@@ -1,7 +1,9 @@
 from scapy.all import *
 from scapy.contrib.mqtt import *
 from time import strftime, localtime
-from MQTT_Broker_v2.mqtt_utils import *
+from MQTT_utils.mqtt_connect import *
+from MQTT_utils.mqtt_publish import *
+from MQTT_utils.mqtt_subscribe import *
 
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.DEBUG)
 
@@ -23,16 +25,34 @@ def connect(current_packet, header, client, addr):
         server_event_known_command(connection_data)
 
 
-def publish(command, header, client):
-    pass
+def publish(current_packet, header, client, addr):
+    ip, port = addr
+
+    # parse packet
+    connection_data = parse_publish_packet(current_packet, header, ip, port)
+
+    if inspect_publish_packet(connection_data):
+        print(strftime("%Y-%m-%d %H:%M:%S", localtime()), str(current_packet))
+    else:
+        server_event_known_command(connection_data)
+    # send the appropriate packet for the received QoS
+    msg_id = int(connection_data['msg_id'])
+    if connection_data['qos'] == 1:
+        client.send(bytes(MQTT() / MQTTPuback(msgid=msg_id)))
+    elif connection_data['qos'] == 2:
+        client.send(bytes(MQTT() / MQTTPubrec(msgid=msg_id)))
+        client.send(bytes(MQTT() / MQTTPubcomp(msgid=msg_id)))
 
 
-def subscribe(command, header, client):
-    pass
+def subscribe(current_packet, header, client, addr):
+    ip, port = addr
 
+    connection_data = parse_subscribe_packet(current_packet, header, ip, port)
 
-def disconnect(command, client, header):
-    pass
+    if connection_data:
+        server_event_known_command(connection_data)
+        client.send(
+            bytes(MQTT() / MQTTSuback(msgid=int(connection_data['msg_id']), retcode=int(connection_data['qos']))))
 
 
 def server_event_unexpected_packet(command, client, has_connected):
@@ -67,13 +87,12 @@ def client_thread(client, command_type, addr):
 
             elif has_connected:
                 if type_of_command == 'PUBLISH':
-                    publish(command, client, header_as_bits)
+                    publish(command, header_as_bits, client, addr)
 
                 elif type_of_command == 'SUBSCRIBE':
-                    subscribe(command, header_as_bits, client)
+                    subscribe(command, header_as_bits, client, addr)
 
                 elif type_of_command == 'DISCONNECT':
-                    disconnect(command, client, header_as_bits)
                     break
                 elif type_of_command == 'PUBREL' or type_of_command == 'PINGREQ':
                     pass
@@ -87,13 +106,6 @@ def client_thread(client, command_type, addr):
 
 
 def main():
-    command_type = {'1000': 'CONNECT',
-                    '0001': 'SUBSCRIBE',
-                    '1100': 'PUBLISH',
-                    '0111': 'DISCONNECT',
-                    '0110': 'PUBREL',
-                    '0011': 'PINGREQ'}
-
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server.bind(('', 1883))
