@@ -1,6 +1,8 @@
 import struct
 
 
+# will packet which is part of connect
+
 class Will:
 
     def __init__(self, msg='', topic='', topic_len='0', msg_len='0', qos=0, flag=0):
@@ -12,10 +14,7 @@ class Will:
         self.flag = flag
 
 
-packet_pair = {'len+int': 0,
-               'len+string': 1,
-               'id+message': 2}
-
+# 4-bits representation of a mqtt packet code
 command_type = {'1000': 'CONNECT',
                 '0001': 'SUBSCRIBE',
                 '1100': 'PUBLISH',
@@ -24,10 +23,7 @@ command_type = {'1000': 'CONNECT',
                 '0011': 'PINGREQ'}
 
 
-# will packet which is part of connect
-
-
-# get a string o bits from an integer (little-endian)
+# get a 8-bits string from an integer (little-endian)
 
 def get_bits(header):
     bits_string = ''
@@ -47,10 +43,19 @@ def pass_message_len(command):
     return i
 
 
+packet_pair = {'len+int': 0,
+               'len+string': 1,
+               'id+message': 2}
+
+
 # there are 3 type of subpackets to extract
 # 1. length + integer -> 'len+int'
 # 2.length + string -> 'len+string'
 # 3. messageId + message -> 'id+message'
+
+# index keeps the count of the bytes in the packet
+# it is used and incremented to reach specific packet fields
+# and to extract their values
 
 def get_packet_field(current_packet, index, combination):
     length = struct.unpack('>H', current_packet[index:index + 2])
@@ -67,6 +72,7 @@ def get_packet_field(current_packet, index, combination):
                 break
         return index, str(length[0]), field_value
     else:
+        # otherwise, the length of the message is known and the message is processed easier
         field_value = ''.join(chr(x) for x in current_packet[index:index + length[0]])
         index += length[0]
         return index, str(length[0]), field_value

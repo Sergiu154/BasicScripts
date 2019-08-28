@@ -4,13 +4,17 @@ from MQTT_utils.mqtt_parse import *
 def parse_publish_packet(current_packet, header, ip, port):
     qos = int(header[1]) + 2 * int(header[2])
 
+    # pass the variable message length
     index = pass_message_len(current_packet) + 1
+
+    # get the topic
     index, topic_len, topic = get_packet_field(current_packet, index, 'len+string')
 
     msg_id = 0
     if qos > 0:
         index, msg_id, message = get_packet_field(current_packet, index, 'id+message')
     else:
+        # if QoS == 0, there is no message ID, then parse just the message
         msg = ''
         while True:
             try:
@@ -19,6 +23,7 @@ def parse_publish_packet(current_packet, header, ip, port):
             except IndexError:
                 break
         message = msg[:len(msg) - 2]
+
     param_dict = {
         'ip': ip,
         'port': port,
@@ -33,5 +38,6 @@ def parse_publish_packet(current_packet, header, ip, port):
     return param_dict
 
 
+# check the publish packet values fields
 def inspect_publish_packet(param_dict):
     return (not param_dict['topic_len'].isdigit()) or (param_dict['qos'] > 0 and not param_dict['msg_id'].isdigit())

@@ -8,7 +8,8 @@ def parse_subscribe_packet(current_packet, header, ip, port):
     if not str(msg_id[0]).isdigit() or header[:4] != '0100':
         return None
     index += 2
-
+    # as the client can subscribe to multiple topics, we check for the first malformed field
+    # and exit the function; then print the data
     while True:
         try:
             index, topic_len, topic = get_packet_field(current_packet, index, 'len+string')
@@ -20,6 +21,7 @@ def parse_subscribe_packet(current_packet, header, ip, port):
 
         except struct.error:
             break
+
     param_dict = {
         'ip': ip,
         'port': port,
