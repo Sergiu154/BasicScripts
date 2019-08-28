@@ -9,15 +9,19 @@ logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.DEBUG)
 
 
 def connect(current_packet, header, client, addr):
+    # send connack packet
     client.send(bytes(MQTT() / MQTTConnack(sessPresentFlag=0, retcode=0)))
 
     ip, port = addr
     logging.debug('Client connected: ' + ip + ' ' + str(port))
+
     to_check, connection_data, connect_flag = parse_connect_packet(current_packet, ip, port)
 
     logging.debug('Protocol: ' + str(to_check['proto_name']) + ' ' + str(to_check['proto_len']))
     logging.debug('Username: ' + connection_data['username'])
     logging.debug('Password: ' + connection_data['password'])
+
+    # inspect connect packet for malformed data
 
     if inspect_connect_packet(to_check) or header[:4] != '0000' or connect_flag[0] != '0':
         print(strftime("%Y-%m-%d %H:%M:%S", localtime()), str(current_packet))
@@ -31,10 +35,12 @@ def publish(current_packet, header, client, addr):
     # parse packet
     connection_data = parse_publish_packet(current_packet, header, ip, port)
 
+    # check a publish packet for some malformed data
     if inspect_publish_packet(connection_data):
         print(strftime("%Y-%m-%d %H:%M:%S", localtime()), str(current_packet))
     else:
         server_event_known_command(connection_data)
+
     # send the appropriate packet for the received QoS
     msg_id = int(connection_data['msg_id'])
     if connection_data['qos'] == 1:
@@ -48,12 +54,14 @@ def subscribe(current_packet, header, client, addr):
     ip, port = addr
 
     connection_data = parse_subscribe_packet(current_packet, header, ip, port)
-
+    # receive the incoming packet, if it is None, the packet is no valid
     if connection_data:
         server_event_known_command(connection_data)
         client.send(
             bytes(MQTT() / MQTTSuback(msgid=int(connection_data['msg_id']), retcode=int(connection_data['qos']))))
 
+
+# handle an unexpected packet and set it's current state depending on the Connect packet
 
 def server_event_unexpected_packet(command, client, has_connected):
     logging.debug(command.decode('utf-8'))
@@ -63,6 +71,8 @@ def server_event_unexpected_packet(command, client, has_connected):
 
     print(strftime("%Y-%m-%d %H:%M:%S", localtime()), str(command), state)
 
+
+# print the fields and the value of a valid packet
 
 def server_event_known_command(param_dict):
     for key in param_dict.keys():
@@ -106,6 +116,7 @@ def client_thread(client, command_type, addr):
 
 
 def main():
+    # use a socket, bind it to a specific port and listen the incoming connections
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server.bind(('', 1883))
