@@ -28,13 +28,14 @@ client.on_message = on_message
 client.username_pw_set(username="Nume", password='parola')
 client.loop_start()
 client.connect('127.0.0.1', 1883, 60)
+client.will_set('Toopic', 'Hello', 0)
 time.sleep(15)
-client.subscribe('Toopic', qos=1)
+client.subscribe([('Toopic', 2), ('Nontopic', 0)])
 time.sleep(5)
 
-client.publish('Toopic', 'Published', qos=1)
+client.publish('Toopic', 'dfssdfsdfsd', qos=2)
 
 time.sleep(5)
 
 client.loop_stop()
-client.disconnect()
+# client.disconnect()

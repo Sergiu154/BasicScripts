@@ -5,6 +5,7 @@ from scapy.contrib.mqtt import *
 import logging
 from time import strftime, localtime
 import json
+import struct
 
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.DEBUG)
 
@@ -139,7 +140,7 @@ def inspect_connect_packet(check):
 def connect_comm(command, header_as_bits, client):
     # send Connack packet
     # TODO check if the client is in your database(maybe a list of clients)
-    #  if True: sessPresent =1
+    #  if True: sessPresent == 1
 
     sess_present = 0
 
@@ -167,14 +168,6 @@ def connect_comm(command, header_as_bits, client):
     username_flag = int(connect_flag[6])
     password_flag = int(connect_flag[7])
     will_flag = int(connect_flag[2])
-    # will_retain = 0
-    # will_qos = 0
-    # will_topic = ''
-    # will_topic_len = 0
-    # will_msg_len = 0
-    # will_msg = ''
-    # username_len = 0
-    # password_len = 0
     username = ''
     password = ''
 
@@ -271,7 +264,7 @@ def publish_comm(command, client, header_as_bits, client_data):
                 break
         message = msg[:len(msg) - 2]
 
-    # store the data that has been received
+    # store the data that has been receive
     client_data.add_topic(topic, qos)
     client_data.add_message_on_topic(topic, message)
 
